@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>光之聚焦 - 光學繪圖挑戰 (AI版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            touch-action: none;
+            background-color: #0f172a; /* Slate 900 */
+            color: #e2e8f0;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+            cursor: crosshair;
+        }
+        .ui-panel {
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 16px;
+        }
+        .btn {
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        /* Custom Input for Level Select */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+        .ai-bubble {
+            display: none;
+            position: absolute;
+            bottom: 140px;
+            right: 20px;
+            width: 320px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #a855f7;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(168, 85, 247, 0.2);
+            z-index: 50;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .loading-dots:after {
+            content: '.';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60% { content: '...'; }
+            80%, 100% { content: ''; }
+        }
+        /* Ray Types Indicator */
+        .ray-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Header info with Level Input -->
+    <div class="absolute top-6 left-6 z-10">
+        <h1 class="text-3xl font-bold text-white tracking-wider flex items-center gap-3">
+            光之聚焦 <span class="text-xs bg-purple-600 px-2 py-0.5 rounded text-white font-mono">PUZZLE</span>
+        </h1>
+        <div class="flex items-center gap-2 mt-2 text-slate-400">
+            <span>關卡</span>
+            <input type="number" id="level-input" min="1" max="50" value="1" 
+                   class="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-cyan-400 font-bold text-center focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition"
+                   onchange="jumpToLevel(this.value)">
+            <span>/ 50</span>
+        </div>
+    </div>
+
+    <!-- Main Game Area -->
+    <div class="relative w-full max-w-6xl aspect-[16/9] flex items-center justify-center">
+        <canvas id="gameCanvas"></canvas>
+        
+        <!-- Tutorial/Feedback Overlay -->
+        <div id="message-overlay" class="absolute top-10 left-1/2 -translate-x-1/2 text-center pointer-events-none transition-opacity duration-300 opacity-0">
+            <span class="bg-black/70 text-cyan-200 px-6 py-2 rounded-full text-lg shadow-lg border border-cyan-500/30">
+                請畫出兩條特定的光線連接物體與像
+            </span>
+        </div>
+
+        <!-- AI Assistant -->
+        <div id="ai-bubble" class="ai-bubble">
+            <h4 class="text-purple-400 font-bold mb-2 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                Gemini 光學導師
+            </h4>
+            <div id="ai-content" class="text-slate-300 max-h-48 overflow-y-auto pr-2 custom-scrollbar"></div>
+            <button onclick="closeAI()" class="absolute top-3 right-3 text-slate-500 hover:text-white transition">&times;</button>
+        </div>
+    </div>
+
+    <!-- Control Bar -->
+    <div class="w-full max-w-6xl mt-6 ui-panel p-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+        
+        <!-- Navigation -->
+        <div class="flex items-center gap-3 justify-start">
+            <button onclick="prevLevel()" class="btn px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-medium flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                上一關
+            </button>
+            <button onclick="nextLevel()" id="next-btn" class="btn px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                下一關
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+            </button>
+        </div>
+
+        <!-- Progress / Tasks -->
+        <div class="flex justify-center gap-6 text-sm font-medium">
+            <div id="task-parallel" class="flex items-center gap-2 opacity-50 transition-opacity">
+                <span class="ray-indicator bg-yellow-400"></span> 平行主軸光線
+            </div>
+            <div id="task-center" class="flex items-center gap-2 opacity-50 transition-opacity">
+                <span class="ray-indicator bg-green-400"></span> 過鏡心光線
+            </div>
+        </div>
+
+        <!-- Tools -->
+        <div class="flex justify-end gap-3">
+             <button onclick="resetCurrentLevel()" class="btn px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm">
+                重畫
+            </button>
+            <button onclick="askAIHint()" class="btn px-5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-lg text-white font-bold shadow-lg shadow-purple-900/30 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
+                AI 提示
+            </button>
+        </div>
+    </div>
+
+    <!-- Win Modal -->
+    <div id="win-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+        <div class="bg-slate-800 p-8 rounded-2xl border border-cyan-500/50 shadow-[0_0_50px_rgba(6,182,212,0.3)] text-center max-w-sm w-full transform transition-all scale-100">
+            <div class="text-5xl mb-4">✨</div>
+            <h2 class="text-3xl font-bold text-white mb-2">關卡完成！</h2>
+            <p class="text-slate-400 mb-6">光線路徑正確無誤。</p>
+            <button onclick="nextLevel()" class="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold rounded-xl text-lg transition hover:scale-105">
+                挑戰下一關
+            </button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * GAME ENGINE & LOGIC
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height, centerX, centerY, scale;
+
+        // Game State
+        const TOTAL_LEVELS = 50;
+        let currentLevelIdx = 0;
+        let levelData = {}; // Stores current f, do, di, lensType
+        let userLines = []; // Array of {points: [{x,y}, {x,y}, {x,y}], type: 'parallel'|'center', completed: bool}
+        let isDrawing = false;
+        let currentPath = []; // Points for the line currently being drawn
+        let currentPointerPos = { x: 0, y: 0 }; // Track pointer for rubber banding
+        let solvedState = { parallel: false, center: false };
+
+        // DOM Elements
+        const levelInput = document.getElementById('level-input');
+        const nextBtn = document.getElementById('next-btn');
+        const winModal = document.getElementById('win-modal');
+        const taskParallel = document.getElementById('task-parallel');
+        const taskCenter = document.getElementById('task-center');
+        const aiBubble = document.getElementById('ai-bubble');
+        const aiContent = document.getElementById('ai-content');
+
+        // --- Level Generation ---
+
+        function generateLevel(levelNum) {
+            // Seeded-like generation for consistency (simplified)
+            // Levels 1-40: Convex (Real Image)
+            // Levels 41-50: Concave (Virtual Image - specific challenge)
+            
+            const isConcave = levelNum > 45; // Last 5 levels are hard mode (Concave)
+            const type = isConcave ? 'concave' : 'convex';
+            
+            // Randomize Focal Length (80 - 150)
+            const f = 80 + (levelNum * 73 % 70); 
+            
+            // Randomize Object Distance
+            // For Convex Real Image: do > f. Let's ensure do is between 1.2f and 3f
+            let do_dist;
+            if (type === 'convex') {
+                do_dist = f * (1.2 + (levelNum * 13 % 18) / 10);
+            } else {
+                do_dist = f * (0.5 + (levelNum * 13 % 20) / 10);
+            }
+
+            // Calculate Image Distance (Physics)
+            // 1/f = 1/do + 1/di  => 1/di = 1/f - 1/do
+            // For Concave: f is negative in formula
+            const f_calc = type === 'concave' ? -f : f;
+            const di_dist = (f_calc * do_dist) / (do_dist - f_calc);
+
+            // Object Height (Randomize slightly)
+            const objH = 60 + (levelNum % 5) * 5;
+
+            return {
+                level: levelNum,
+                type: type,
+                f: f, // magnitude
+                do: do_dist,
+                di: di_dist, // signed
+                objH: objH,
+                // Positions (Lens is always center 0)
+                objX: -do_dist,
+                imgX: di_dist,
+                imgH: objH * (-di_dist / do_dist) // Magnification formula
+            };
+        }
+
+        // --- Core Functions ---
+
+        function init() {
+            resize();
+            window.addEventListener('resize', resize);
+            
+            // Interaction
+            canvas.addEventListener('pointerdown', onPointerDown);
+            canvas.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+            
+            loadLevel(0);
+            loop();
+        }
+
+        function resize() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            width = canvas.width;
+            height = canvas.height;
+            centerX = width / 2;
+            centerY = height / 2;
+            scale = Math.min(width, height) / 800; // Base scale
+        }
+
+        function loadLevel(idx) {
+            currentLevelIdx = idx;
+            if (currentLevelIdx < 0) currentLevelIdx = 0;
+            if (currentLevelIdx >= TOTAL_LEVELS) currentLevelIdx = TOTAL_LEVELS - 1;
+
+            levelData = generateLevel(currentLevelIdx + 1);
+            
+            // Reset State
+            userLines = [];
+            currentPath = [];
+            isDrawing = false;
+            solvedState = { parallel: false, center: false };
+            currentPointerPos = { x: levelData.objX, y: levelData.objH }; // Reset pointer safely
+            
+            // UI Updates
+            levelInput.value = currentLevelIdx + 1;
+            winModal.classList.add('hidden');
+            nextBtn.disabled = true;
+            taskParallel.style.opacity = '0.4';
+            taskCenter.style.opacity = '0.4';
+            closeAI();
+            
+            // Initial hint
+            const msg = document.getElementById('message-overlay');
+            msg.style.opacity = '1';
+            setTimeout(() => msg.style.opacity = '0', 3000);
+        }
+
+        function prevLevel() { loadLevel(currentLevelIdx - 1); }
+        function nextLevel() { loadLevel(currentLevelIdx + 1); }
+        function resetCurrentLevel() { loadLevel(currentLevelIdx); }
+        
+        function jumpToLevel(val) {
+            let idx = parseInt(val) - 1;
+            if (isNaN(idx)) idx = 0;
+            loadLevel(idx);
+        }
+
+        // --- Interaction Logic (The "Drawing" Game) ---
+
+        function getSimPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: (e.clientX - rect.left - centerX) / scale,
+                y: (centerY - (e.clientY - rect.top)) / scale
+            };
+        }
+
+        function onPointerDown(e) {
+            if (solvedState.parallel && solvedState.center) return;
+            
+            const pos = getSimPos(e);
+            
+            // Start drawing ONLY from Object Tip
+            // Check proximity to Object Tip
+            const tipX = levelData.objX;
+            const tipY = levelData.objH;
+            
+            const dist = Math.hypot(pos.x - tipX, pos.y - tipY);
+            
+            if (dist < 40) { // Slightly generous hit area
+                isDrawing = true;
+                currentPath = [{x: tipX, y: tipY}]; // Anchor to exact tip
+                currentPointerPos = pos;
+            }
+        }
+
+        function onPointerMove(e) {
+            currentPointerPos = getSimPos(e); // Always update for visual feedback
+            if (!isDrawing) return;
+        }
+
+        function onPointerUp(e) {
+            if (!isDrawing) return;
+            
+            const pos = getSimPos(e);
+            const lensX = 0;
+            
+            // Phase 1: Drawing from Object to Lens
+            if (currentPath.length === 1) {
+                // Check if dropped near lens plane
+                if (Math.abs(pos.x - lensX) < 50) { // Lens width allowance
+                    // Snap to lens plane x=0
+                    currentPath.push({x: 0, y: pos.y});
+                } else {
+                    // Cancel drawing if dropped in middle of nowhere
+                    isDrawing = false;
+                    currentPath = [];
+                }
+            } 
+            // Phase 2: Drawing from Lens to Image
+            else if (currentPath.length === 2) {
+                // Check if dropped near Image Tip
+                const imgTipX = levelData.imgX;
+                const imgTipY = levelData.imgH;
+                const dist = Math.hypot(pos.x - imgTipX, pos.y - imgTipY);
+                
+                if (dist < 50) { // Target allowance
+                    // Snap to Image Tip
+                    currentPath.push({x: imgTipX, y: imgTipY});
+                    validatePath(currentPath);
+                }
+                
+                // Reset drawing state regardless
+                isDrawing = false;
+                currentPath = [];
+            }
+        }
+
+        function validatePath(path) {
+            // Path: [ObjTip, PointOnLens, ImgTip]
+            const lensPoint = path[1];
+            
+            // Check Parallel Ray Logic
+            // ObjTip.y should equal PointOnLens.y (Horizontal line)
+            if (Math.abs(lensPoint.y - levelData.objH) < 15) {
+                if (!solvedState.parallel) {
+                    userLines.push({ points: path, color: '#facc15', type: 'parallel' });
+                    solvedState.parallel = true;
+                    taskParallel.style.opacity = '1';
+                    showFeedback("成功畫出平行光線！");
+                }
+            }
+            
+            // Check Center Ray Logic
+            // PointOnLens.y should be 0 (Optical Center)
+            else if (Math.abs(lensPoint.y) < 15) {
+                if (!solvedState.center) {
+                    userLines.push({ points: path, color: '#4ade80', type: 'center' });
+                    solvedState.center = true;
+                    taskCenter.style.opacity = '1';
+                    showFeedback("成功畫出過鏡心光線！");
+                }
+            } else {
+                showFeedback("這條光線似乎不符合物理規則，重試看看？");
+            }
+
+            checkWin();
+        }
+
+        function showFeedback(text) {
+            const el = document.getElementById('message-overlay');
+            el.innerHTML = `<span class="bg-black/80 text-white px-6 py-2 rounded-full border border-purple-500 shadow-xl backdrop-blur-sm">${text}</span>`;
+            el.style.opacity = '1';
+            setTimeout(() => el.style.opacity = '0', 2500);
+        }
+
+        function checkWin() {
+            if (solvedState.parallel && solvedState.center) {
+                setTimeout(() => {
+                    winModal.classList.remove('hidden');
+                    nextBtn.disabled = false;
+                }, 500);
+            }
+        }
+
+        // --- Rendering ---
+
+        function toScreen(simX, simY) {
+            return {
+                x: centerX + simX * scale,
+                y: centerY - simY * scale
+            };
+        }
+
+        function loop() {
+            ctx.clearRect(0, 0, width, height);
+            
+            // 1. Draw Axis
+            ctx.strokeStyle = '#475569';
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(0, centerY);
+            ctx.lineTo(width, centerY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 2. Draw Lens
+            const lensH = 200 * scale;
+            const lensW = (levelData.type === 'convex' ? 30 : 20) * scale;
+            const lPos = toScreen(0, 0);
+            
+            ctx.strokeStyle = '#22d3ee';
+            ctx.fillStyle = 'rgba(34, 211, 238, 0.1)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            if (levelData.type === 'convex') {
+                ctx.ellipse(lPos.x, lPos.y, lensW/2, lensH/2, 0, 0, Math.PI*2);
+            } else {
+                ctx.moveTo(lPos.x - lensW/2, lPos.y - lensH/2);
+                ctx.quadraticCurveTo(lPos.x + 5, lPos.y, lPos.x - lensW/2, lPos.y + lensH/2);
+                ctx.lineTo(lPos.x + lensW/2, lPos.y + lensH/2);
+                ctx.quadraticCurveTo(lPos.x - 5, lPos.y, lPos.x + lensW/2, lPos.y - lensH/2);
+                ctx.closePath();
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw Focal Points
+            ctx.fillStyle = '#22d3ee';
+            const f1 = toScreen(-levelData.f, 0);
+            const f2 = toScreen(levelData.f, 0);
+            ctx.beginPath(); ctx.arc(f1.x, f1.y, 3, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(f2.x, f2.y, 3, 0, Math.PI*2); ctx.fill();
+            ctx.fillText("F", f1.x, f1.y + 20);
+
+            // 3. Draw Object
+            const oBase = toScreen(levelData.objX, 0);
+            const oTip = toScreen(levelData.objX, levelData.objH);
+            
+            ctx.strokeStyle = '#fbbf24'; // Amber
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(oBase.x, oBase.y);
+            ctx.lineTo(oTip.x, oTip.y);
+            ctx.stroke();
+            // Arrow head
+            drawArrowHead(ctx, oTip.x, oTip.y, true);
+
+            // Highlight Object Tip (Start Point)
+            ctx.beginPath();
+            ctx.arc(oTip.x, oTip.y, 8, 0, Math.PI*2);
+            ctx.fillStyle = '#fbbf24';
+            ctx.fill();
+            // Pulse effect
+            if (!isDrawing) {
+                const pulse = Math.sin(Date.now() / 200) * 3;
+                ctx.strokeStyle = 'rgba(251, 191, 36, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(oTip.x, oTip.y, 12 + pulse, 0, Math.PI*2);
+                ctx.stroke();
+            }
+
+            // 4. Draw Image (Ghost/Target)
+            const iBase = toScreen(levelData.imgX, 0);
+            const iTip = toScreen(levelData.imgX, levelData.imgH);
+            
+            ctx.strokeStyle = '#f87171'; // Red
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(iBase.x, iBase.y);
+            ctx.lineTo(iTip.x, iTip.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Arrow head
+            drawArrowHead(ctx, iTip.x, iTip.y, levelData.imgH > 0);
+
+            // Highlight Image Tip (End Target)
+            if (isDrawing && currentPath.length >= 1) {
+                ctx.fillStyle = 'rgba(248, 113, 113, 0.5)';
+                ctx.beginPath();
+                ctx.arc(iTip.x, iTip.y, 15, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            // 5. Draw User Lines (Completed)
+            userLines.forEach(line => {
+                ctx.strokeStyle = line.color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                const p1 = toScreen(line.points[0].x, line.points[0].y);
+                const p2 = toScreen(line.points[1].x, line.points[1].y);
+                const p3 = toScreen(line.points[2].x, line.points[2].y);
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.stroke();
+            });
+
+            // 6. Draw Current Dragging Line (Rubber Band)
+            if (isDrawing && currentPath.length > 0) {
+                ctx.strokeStyle = '#a5f3fc'; // Light Cyan for active line
+                ctx.lineWidth = 2;
+                ctx.setLineDash([8, 6]);
+                ctx.beginPath();
+                
+                // Draw established path first
+                const start = toScreen(currentPath[0].x, currentPath[0].y);
+                ctx.moveTo(start.x, start.y);
+                
+                let lastPos = start;
+
+                if (currentPath.length > 1) {
+                    const mid = toScreen(currentPath[1].x, currentPath[1].y);
+                    ctx.lineTo(mid.x, mid.y);
+                    lastPos = mid;
+                }
+
+                // Draw rubber band to current mouse pointer
+                const curr = toScreen(currentPointerPos.x, currentPointerPos.y);
+                ctx.lineTo(curr.x, curr.y);
+                
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        function drawArrowHead(ctx, x, y, pointUp) {
+            ctx.beginPath();
+            // Simplified: Just draw a small circle for tip to be clear
+            ctx.fillStyle = ctx.strokeStyle;
+            ctx.arc(x, y, 3, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        // --- Gemini AI ---
+
+        function closeAI() {
+            aiBubble.style.display = 'none';
+        }
+
+        async function askAIHint() {
+            aiBubble.style.display = 'block';
+            aiContent.innerHTML = '<span class="loading-dots text-purple-300">Gemini 正在分析光路...</span>';
+            
+            const apiKey = ""; // Environment Variable
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            const missing = [];
+            if (!solvedState.parallel) missing.push("平行主軸的光線");
+            if (!solvedState.center) missing.push("通過鏡心的光線");
+
+            const prompt = `
+                User is playing a physics puzzle game about Lenses.
+                Level: ${currentLevelIdx + 1}
+                Lens Type: ${levelData.type === 'convex' ? "凸透鏡 (Convex)" : "凹透鏡 (Concave)"}
+                Focal Length: ${levelData.f}
+                Object Distance: ${levelData.do.toFixed(0)}
+                
+                The user needs to draw 2 rays to find the image.
+                They are missing: ${missing.join(' 和 ')}.
+                
+                Please give a concise, helpful hint in Traditional Chinese (Taiwan).
+                Explain HOW to draw the missing ray(s).
+                For example: "試著畫一條從物體尖端出發，平行於地板的光線，它經過透鏡後會..."
+                Do NOT give the coordinates directly. Focus on the concept.
+                Keep it under 3 sentences.
+            `;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }]
+                    })
+                });
+                const data = await response.json();
+                const text = data.candidates[0].content.parts[0].text;
+                aiContent.innerHTML = text;
+            } catch (e) {
+                aiContent.innerText = "AI 暫時無法連線，請檢查網路。提示：平行光過焦點，過心光不偏折。";
+            }
+        }
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>
